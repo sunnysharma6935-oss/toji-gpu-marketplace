@@ -100,6 +100,60 @@ func TestSplitGrossAmount_AlwaysReconciles(t *testing.T) {
 	}
 }
 
+// TestSplitGrossAmount_ZeroSplitScenarios is a regression test for the incident that
+// caused rental b91e32af-b9b8-4a16-8041-995822bc6d55's stop to return HTTP 500: a
+// short final-settlement tick whose platform share rounds down to exactly 0 paise.
+// ledger_entries has CHECK (amount_paise != 0), so tick.go's ProcessBillingTickTx must
+// skip writing the platform_revenue (or host_payable) row entirely when its split is
+// zero, rather than attempting to insert a zero-amount row. This test proves the split
+// math that decision depends on, using the exact rate from the incident (900 paise/hr,
+// 15% commission) — the actual insert-skipping logic lives in tick.go and isn't
+// directly unit-testable here without a live database; this is the pure-math half of
+// the fix's correctness.
+func TestSplitGrossAmount_ZeroSplitScenarios(t *testing.T) {
+	const ratePaisePerHour = int64(900) // the exact rate from the production incident
+
+	cases := []struct {
+		name             string
+		elapsedSeconds   int64
+		wantPlatformZero bool
+		wantHostZero     bool
+	}{
+		// Elapsed=10s: gross=2 paise (900*10/3600, integer). This is the exact shape
+		// of tick that caused the incident — a stop landing shortly after a heartbeat.
+		{name: "10s final tick — platform rounds to zero, host does not", elapsedSeconds: 10, wantPlatformZero: true, wantHostZero: false},
+		// Elapsed=27s: gross=6 paise — still below the threshold where 15% of the
+		// charge reaches 1 paise. Confirms the zero-platform window is not a single
+		// instant but a real, commonly-hit range (0 up to just under 28s elapsed).
+		{name: "27s final tick — still zero platform", elapsedSeconds: 27, wantPlatformZero: true, wantHostZero: false},
+		// Elapsed=28s: gross=7 paise exactly. 15% of 7 is 1.05, truncating to 1 —
+		// the first elapsed-time value at this rate where platform is nonzero again.
+		{name: "28s final tick — platform becomes nonzero", elapsedSeconds: 28, wantPlatformZero: false, wantHostZero: false},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			gross, _ := ComputeTickCharge(ratePaisePerHour, c.elapsedSeconds, 0)
+			platform, host := SplitGrossAmount(gross, PlatformCommissionBps)
+
+			if platform+host != gross {
+				t.Fatalf("reconciliation broken: platform(%d) + host(%d) != gross(%d)", platform, host, gross)
+			}
+			if (platform == 0) != c.wantPlatformZero {
+				t.Errorf("elapsed=%ds gross=%d: platform=%d, wantZero=%v", c.elapsedSeconds, gross, platform, c.wantPlatformZero)
+			}
+			if (host == 0) != c.wantHostZero {
+				t.Errorf("elapsed=%ds gross=%d: host=%d, wantZero=%v", c.elapsedSeconds, gross, host, c.wantHostZero)
+			}
+		})
+	}
+	// The symmetric case — host rounding to zero — is already covered by
+	// TestSplitGrossAmount_AlwaysReconciles's {gross: 999, bps: 10000} case (100%
+	// commission). It isn't reachable in production at the current fixed 15%
+	// (PlatformCommissionBps), since host = gross - platform is always >= 85% of a
+	// nonzero gross, but the fix in tick.go guards both sides symmetrically regardless.
+}
+
 // Proves ComputeTickCharge panics rather than silently corrupting state if called
 // with a remainder outside its documented invariant — this is a programmer-error
 // guard, not a runtime condition that should ever occur via the tick processor.

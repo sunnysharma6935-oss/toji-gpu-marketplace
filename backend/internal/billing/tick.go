@@ -89,28 +89,43 @@ func ProcessBillingTickTx(ctx context.Context, tx pgx.Tx, rentalID uuid.UUID, cu
 			return TickResult{}, fmt.Errorf("insert usage event: %w", err)
 		}
 
-		platformAccountID, err := GetOrCreateAccount(ctx, tx, "platform_revenue", "platform", nil)
-		if err != nil {
-			return TickResult{}, fmt.Errorf("resolve platform account: %w", err)
-		}
-
 		if _, err = InsertLedgerEntry(ctx, tx, EntryInput{
 			AccountID: customerAccountID, AmountPaise: -chargePaise,
 			EntryType: "rental_charge", Status: "completed", EventID: &eventID, RentalID: &rentalID,
 		}); err != nil {
 			return TickResult{}, fmt.Errorf("insert customer charge entry: %w", err)
 		}
-		if _, err = InsertLedgerEntry(ctx, tx, EntryInput{
-			AccountID: platformAccountID, AmountPaise: platformPaise,
-			EntryType: "platform_revenue", Status: "completed", EventID: &eventID, RentalID: &rentalID,
-		}); err != nil {
-			return TickResult{}, fmt.Errorf("insert platform revenue entry: %w", err)
+
+		// platform_revenue and host_payable are inserted only when their split is
+		// actually nonzero. ledger_entries has CHECK (amount_paise != 0) — a zero-value
+		// split (e.g. a short final settlement where commission rounds down to 0 paise)
+		// is not a real money movement, so no row is written for that side. This is NOT
+		// a relaxation of the ledger constraint; the constraint stays exactly as-is.
+		// gross = platform + host remains provable from rental_usage_events alone,
+		// which always stores all three numbers including any zero, regardless of how
+		// many ledger_entries rows follow. A usage event therefore produces 2 or 3
+		// ledger_entries rows (customer charge always present, plus whichever of
+		// platform/host are individually nonzero — at least one always is, since they
+		// sum to a positive gross and can't both be zero).
+		if platformPaise > 0 {
+			platformAccountID, err := GetOrCreateAccount(ctx, tx, "platform_revenue", "platform", nil)
+			if err != nil {
+				return TickResult{}, fmt.Errorf("resolve platform account: %w", err)
+			}
+			if _, err = InsertLedgerEntry(ctx, tx, EntryInput{
+				AccountID: platformAccountID, AmountPaise: platformPaise,
+				EntryType: "platform_revenue", Status: "completed", EventID: &eventID, RentalID: &rentalID,
+			}); err != nil {
+				return TickResult{}, fmt.Errorf("insert platform revenue entry: %w", err)
+			}
 		}
-		if _, err = InsertLedgerEntry(ctx, tx, EntryInput{
-			AccountID: hostAccountID, AmountPaise: hostPaise,
-			EntryType: "host_payable", Status: "completed", EventID: &eventID, RentalID: &rentalID,
-		}); err != nil {
-			return TickResult{}, fmt.Errorf("insert host payable entry: %w", err)
+		if hostPaise > 0 {
+			if _, err = InsertLedgerEntry(ctx, tx, EntryInput{
+				AccountID: hostAccountID, AmountPaise: hostPaise,
+				EntryType: "host_payable", Status: "completed", EventID: &eventID, RentalID: &rentalID,
+			}); err != nil {
+				return TickResult{}, fmt.Errorf("insert host payable entry: %w", err)
+			}
 		}
 
 		if err = ConsumeFromReservation(ctx, tx, rentalID, chargePaise); err != nil {
