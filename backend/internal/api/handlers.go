@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 
 	"github.com/google/uuid"
@@ -330,6 +331,21 @@ func CreateRental(w http.ResponseWriter, r *http.Request) {
 
 	rentalID := uuid.New()
 
+	// Insert the rental row FIRST. reservations.rental_id is a real (non-deferred)
+	// foreign key to rentals(id) — Postgres checks it at INSERT time, not at commit.
+	// The reservation below references this row, so it must already exist in the
+	// database before ReserveAtRentalCreation runs, even though both statements are
+	// in the same transaction and roll back together on any failure.
+	_, err = tx.Exec(
+		r.Context(),
+		`INSERT INTO rentals (id, listing_id, customer_id, status) VALUES ($1, $2, $3, 'provisioning')`,
+		rentalID, listingID, userID,
+	)
+	if err != nil {
+		http.Error(w, "could not create rental", http.StatusInternalServerError)
+		return
+	}
+
 	custAccountID, err := billing.GetOrCreateAccount(r.Context(), tx, "customer_balance", "customer", &custUUID)
 	if err != nil {
 		http.Error(w, "could not resolve customer account", http.StatusInternalServerError)
@@ -341,17 +357,11 @@ func CreateRental(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "insufficient TOJI balance to start this rental", http.StatusPaymentRequired)
 			return
 		}
+		// Log the real underlying error server-side (e.g. a constraint violation,
+		// a connection issue) so it's visible for debugging — the customer still
+		// only ever sees the generic message below, nothing internal is exposed.
+		log.Printf("CreateRental: reservation failed for rental %s: %v", rentalID, err)
 		http.Error(w, "could not reserve balance", http.StatusInternalServerError)
-		return
-	}
-
-	_, err = tx.Exec(
-		r.Context(),
-		`INSERT INTO rentals (id, listing_id, customer_id, status) VALUES ($1, $2, $3, 'provisioning')`,
-		rentalID, listingID, userID,
-	)
-	if err != nil {
-		http.Error(w, "could not create rental", http.StatusInternalServerError)
 		return
 	}
 
