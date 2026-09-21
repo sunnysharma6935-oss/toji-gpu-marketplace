@@ -44,14 +44,14 @@ func main() {
 	// Rental lifecycle
 	// These agent endpoints authenticate using X-Agent-Token,
 	// so they must NOT use RequireAuth.
-	r.Post("/agent/rentals/{id}/ready", api.RentalReady)
-	r.Post("/agent/rentals/{id}/usage-heartbeat", api.UsageHeartbeat)
-	r.Post("/agent/rentals/{id}/stop", api.AgentStopRental)
-	r.Post("/agent/rentals/{id}/provisioning-failed", api.ProvisioningFailed)
+	r.Post("/agent/rentals/{rental_id}/ready", api.RentalReady)
+	r.Post("/agent/rentals/{rental_id}/usage-heartbeat", api.UsageHeartbeat)
+	r.Post("/agent/rentals/{rental_id}/stop", api.AgentStopRental)
+	r.Post("/agent/rentals/{rental_id}/provisioning-failed", api.ProvisioningFailed)
 	r.Get("/agent/rentals/active", api.ListActiveRentalsForHost)
 
 	// Customer rental stop uses normal JWT authentication.
-	r.Post("/rentals/{id}/stop", api.RequireAuth(api.StopRental))
+	r.Post("/rentals/{rental_id}/stop", api.RequireAuth(api.StopRental))
 
 	// Billing
 	r.Post("/billing/topup", api.RequireAuth(api.TopUp))

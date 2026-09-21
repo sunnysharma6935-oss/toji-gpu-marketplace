@@ -14,9 +14,10 @@ import (
 // exists to inform what a sane safety margin actually is.
 const ReservationWindowHours = 1
 
-// ReservationTopUpThresholdFraction: attempt a top-up once the held amount drops
-// below this fraction of the full window. Also an open config decision (spec F.2).
-const ReservationTopUpThresholdFraction = 0.25
+// ReservationTopUpThresholdPercent: attempt a top-up once the held amount drops below
+// this percentage of the full window. Integer percentage (25 = 25%), not a float — every
+// money-derived calculation in this package stays integer-only, no exceptions.
+const ReservationTopUpThresholdPercent = 25
 
 var ErrInsufficientBalance = errors.New("insufficient spendable balance")
 
@@ -82,7 +83,7 @@ func MaybeTopUpReservation(ctx context.Context, tx pgx.Tx, customerAccountID, re
 	}
 
 	fullWindow := ratePaisePerHour * ReservationWindowHours
-	threshold := int64(float64(fullWindow) * ReservationTopUpThresholdFraction)
+	threshold := (fullWindow * ReservationTopUpThresholdPercent) / 100 // integer division, no float anywhere
 	if current > threshold {
 		return true, nil // no top-up needed yet
 	}
