@@ -7,6 +7,7 @@ import (
 	"os"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/go-chi/cors"
 	"gpumarketplace/backend/internal/api"
 	"gpumarketplace/backend/internal/db"
 )
@@ -20,6 +21,15 @@ func main() {
 
 	r := chi.NewRouter()
 
+	// CORS for the local TOJI frontend.
+	r.Use(cors.Handler(cors.Options{
+		AllowedOrigins:   []string{"http://localhost:5173"},
+		AllowedMethods:   []string{"GET", "POST", "OPTIONS"},
+		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type"},
+		AllowCredentials: false,
+	}))
+
+	// Health
 	r.Get("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("ok"))
 	})
@@ -39,6 +49,8 @@ func main() {
 
 	// Rentals
 	r.Post("/rentals", api.RequireAuth(api.CreateRental))
+	r.Get("/rentals", api.RequireAuth(api.ListCustomerRentals))
+	r.Get("/rentals/{rental_id}", api.RequireAuth(api.GetCustomerRental))
 	r.Get("/agent/rentals/pending", api.GetPendingRentals)
 
 	// Rental lifecycle
